@@ -90,7 +90,7 @@ public class CanalToPulsarIT extends TestSuiteBase implements TestResource {
     private static final MySqlContainer MYSQL_CONTAINER = createMySqlContainer(MySqlVersion.V5_7);
 
     private final UniqueDatabase inventoryDatabase =
-            new UniqueDatabase(MYSQL_CONTAINER, "canal", "mysqluser", "mysqlpw");
+            new UniqueDatabase(MYSQL_CONTAINER, "canal", "mysqluser", "mysqlpw", "canal");
 
     private static MySqlContainer createMySqlContainer(MySqlVersion version) {
         MySqlContainer mySqlContainer =
@@ -309,8 +309,9 @@ public class CanalToPulsarIT extends TestSuiteBase implements TestResource {
                         POSTGRESQL_CONTAINER.getJdbcUrl(),
                         POSTGRESQL_CONTAINER.getUsername(),
                         POSTGRESQL_CONTAINER.getPassword())) {
-            try (Statement statement = connection.createStatement()) {
-                ResultSet resultSet = statement.executeQuery("SELECT * FROM sink ORDER BY id");
+            try (Statement statement = connection.createStatement();
+                    ResultSet resultSet =
+                            statement.executeQuery("SELECT * FROM sink ORDER BY id"); ) {
                 while (resultSet.next()) {
                     List<Object> row =
                             Arrays.asList(

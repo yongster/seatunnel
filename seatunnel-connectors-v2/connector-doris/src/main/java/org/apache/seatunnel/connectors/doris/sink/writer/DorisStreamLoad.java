@@ -17,6 +17,11 @@
 
 package org.apache.seatunnel.connectors.doris.sink.writer;
 
+import org.apache.seatunnel.shade.com.fasterxml.jackson.core.type.TypeReference;
+
+import org.apache.seatunnel.api.table.catalog.TablePath;
+import org.apache.seatunnel.common.utils.ExceptionUtils;
+import org.apache.seatunnel.common.utils.JsonUtils;
 import org.apache.seatunnel.connectors.doris.config.DorisConfig;
 import org.apache.seatunnel.connectors.doris.exception.DorisConnectorErrorCode;
 import org.apache.seatunnel.connectors.doris.exception.DorisConnectorException;
@@ -30,10 +35,9 @@ import org.apache.http.entity.InputStreamEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.util.EntityUtils;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -63,32 +67,34 @@ public class DorisStreamLoad implements Serializable {
     private static final String LOAD_URL_PATTERN = "http://%s/api/%s/%s/_stream_load";
     private static final String ABORT_URL_PATTERN = "http://%s/api/%s/_stream_load_2pc";
     private static final String JOB_EXIST_FINISHED = "FINISHED";
-
-    private String loadUrlStr;
-    private String hostPort;
+    private final String loadUrlStr;
+    @Getter private final String hostPort;
     private final String abortUrlStr;
     private final String user;
     private final String passwd;
-    private final String db;
+    @Getter private final String db;
     private final String table;
     private final boolean enable2PC;
     private final boolean enableDelete;
     private final Properties streamLoadProp;
     private final RecordStream recordStream;
-    private Future<CloseableHttpResponse> pendingLoadFuture;
+    @Getter private Future<CloseableHttpResponse> pendingLoadFuture;
     private final CloseableHttpClient httpClient;
     private final ExecutorService executorService;
-    private boolean loadBatchFirstRecord;
+    private volatile boolean loadBatchFirstRecord;
+    private volatile boolean loading = false;
+    private String label;
+    @Getter private long recordCount = 0;
 
     public DorisStreamLoad(
             String hostPort,
+            TablePath tablePath,
             DorisConfig dorisConfig,
             LabelGenerator labelGenerator,
             CloseableHttpClient httpClient) {
         this.hostPort = hostPort;
-        String[] tableInfo = dorisConfig.getTableIdentifier().split("\\.");
-        this.db = tableInfo[0];
-        this.table = tableInfo[1];
+        this.db = tablePath.getDatabaseName();
+        this.table = tablePath.getTableName();
         this.user = dorisConfig.getUsername();
         this.passwd = dorisConfig.getPassword();
         this.labelGenerator = labelGenerator;
@@ -111,23 +117,6 @@ public class DorisStreamLoad implements Serializable {
         lineDelimiter =
                 streamLoadProp.getProperty(LINE_DELIMITER_KEY, LINE_DELIMITER_DEFAULT).getBytes();
         loadBatchFirstRecord = true;
-    }
-
-    public String getDb() {
-        return db;
-    }
-
-    public String getHostPort() {
-        return hostPort;
-    }
-
-    public void setHostPort(String hostPort) {
-        this.hostPort = hostPort;
-        this.loadUrlStr = String.format(LOAD_URL_PATTERN, hostPort, this.db, this.table);
-    }
-
-    public Future<CloseableHttpResponse> getPendingLoadFuture() {
-        return pendingLoadFuture;
     }
 
     public void abortPreCommit(String labelSuffix, long chkID) throws Exception {
@@ -190,18 +179,34 @@ public class DorisStreamLoad implements Serializable {
     public void writeRecord(byte[] record) throws IOException {
         if (loadBatchFirstRecord) {
             loadBatchFirstRecord = false;
+            recordStream.startInput();
+            startStreamLoad();
         } else {
             recordStream.write(lineDelimiter);
         }
         recordStream.write(record);
+        recordCount++;
     }
 
-    @VisibleForTesting
-    public RecordStream getRecordStream() {
-        return recordStream;
+    public String getLoadFailedMsg() {
+        if (!loading) {
+            return null;
+        }
+        if (this.getPendingLoadFuture() != null && this.getPendingLoadFuture().isDone()) {
+            String errorMessage;
+            try {
+                errorMessage = handlePreCommitResponse(pendingLoadFuture.get()).getMessage();
+            } catch (Exception e) {
+                errorMessage = ExceptionUtils.getMessage(e);
+            }
+            recordStream.setErrorMessageByStreamLoad(errorMessage);
+            return errorMessage;
+        } else {
+            return null;
+        }
     }
 
-    public RespContent handlePreCommitResponse(CloseableHttpResponse response) throws Exception {
+    private RespContent handlePreCommitResponse(CloseableHttpResponse response) throws Exception {
         final int statusCode = response.getStatusLine().getStatusCode();
         if (statusCode == HTTP_TEMPORARY_REDIRECT && response.getEntity() != null) {
             String loadResult = EntityUtils.toString(response.getEntity());
@@ -213,20 +218,31 @@ public class DorisStreamLoad implements Serializable {
     }
 
     public RespContent stopLoad() throws IOException {
-        recordStream.endInput();
-        log.info("stream load stopped.");
-        checkState(pendingLoadFuture != null);
-        try {
-            return handlePreCommitResponse(pendingLoadFuture.get());
-        } catch (Exception e) {
-            throw new DorisConnectorException(DorisConnectorErrorCode.STREAM_LOAD_FAILED, e);
+        loading = false;
+        if (pendingLoadFuture != null) {
+            log.info("stream load stopped.");
+            recordStream.endInput();
+            try {
+                return handlePreCommitResponse(pendingLoadFuture.get());
+            } catch (Exception e) {
+                throw new DorisConnectorException(DorisConnectorErrorCode.STREAM_LOAD_FAILED, e);
+            } finally {
+                pendingLoadFuture = null;
+            }
+        } else {
+            return null;
         }
     }
 
-    public void startLoad(String label) throws IOException {
+    public void startLoad(String label) {
         loadBatchFirstRecord = true;
+        recordCount = 0;
+        this.label = label;
+        this.loading = true;
+    }
+
+    private void startStreamLoad() {
         HttpPutBuilder putBuilder = new HttpPutBuilder();
-        recordStream.startInput();
         log.info("stream load started for {}", label);
         try {
             InputStreamEntity entity = new InputStreamEntity(recordStream);
@@ -272,10 +288,9 @@ public class DorisStreamLoad implements Serializable {
                     "Fail to abort transaction " + txnID + " with url " + abortUrlStr);
         }
 
-        ObjectMapper mapper = new ObjectMapper();
         String loadResult = EntityUtils.toString(response.getEntity());
         Map<String, String> res =
-                mapper.readValue(loadResult, new TypeReference<HashMap<String, String>>() {});
+                JsonUtils.parseObject(loadResult, new TypeReference<HashMap<String, String>>() {});
         if (!LoadStatus.SUCCESS.equals(res.get("status"))) {
             if (ResponseUtil.isCommitted(res.get("msg"))) {
                 throw new DorisConnectorException(

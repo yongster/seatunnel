@@ -12,7 +12,7 @@
 > Flink<br/>
 > SeaTunnel Zeta<br/>
 
-## Key features
+## Key Features
 
 - [x] [exactly-once](../../concept/connector-v2-features.md)
 
@@ -36,7 +36,7 @@ Write Rows to a Apache RocketMQ topic.
 | format               | String  | no       | json                     | Data format. The default format is json. Optional text format. The default field separator is ",".If you customize the delimiter, add the "field_delimiter" option. |
 | field.delimiter      | String  | no       | ,                        | Customize the field delimiter for data format.                                                                                                                      |
 | producer.send.sync   | Boolean | no       | false                    | If true, the message will be sync sent.                                                                                                                             |
-| common-options       | config  | no       | -                        | Sink plugin common parameters, please refer to [Sink Common Options](common-options.md) for details.                                                                |
+| common-options       | config  | no       | -                        | Sink plugin common parameters, please refer to [Sink Common Options](../sink-common-options.md) for details.                                                        |
 
 ### partition.key.fields [array]
 
@@ -61,7 +61,7 @@ If name is set as the key, then the hash value of the name column will determine
 
 ```hocon
 env {
-  execution.parallelism = 1
+  parallelism = 1
 }
 
 source {
@@ -107,7 +107,7 @@ sink {
 
 ```hocon
 env {
-  execution.parallelism = 1
+  parallelism = 1
 }
 
 source {
@@ -152,7 +152,7 @@ sink {
 ```hocon
 
 env {
-  execution.parallelism = 1
+  parallelism = 1
   job.mode = "STREAMING"
 }
 

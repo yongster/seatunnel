@@ -17,17 +17,13 @@
 
 package org.apache.seatunnel.engine.e2e;
 
-import org.apache.seatunnel.common.config.Common;
-import org.apache.seatunnel.common.config.DeployMode;
 import org.apache.seatunnel.engine.client.SeaTunnelClient;
+import org.apache.seatunnel.engine.client.job.ClientJobExecutionEnvironment;
 import org.apache.seatunnel.engine.client.job.ClientJobProxy;
-import org.apache.seatunnel.engine.client.job.JobExecutionEnvironment;
-import org.apache.seatunnel.engine.common.Constant;
 import org.apache.seatunnel.engine.common.config.ConfigProvider;
 import org.apache.seatunnel.engine.common.config.JobConfig;
 import org.apache.seatunnel.engine.common.config.SeaTunnelConfig;
 import org.apache.seatunnel.engine.core.job.JobStatus;
-import org.apache.seatunnel.engine.server.SeaTunnelServer;
 import org.apache.seatunnel.engine.server.SeaTunnelServerStarter;
 import org.apache.seatunnel.engine.server.rest.RestConstant;
 
@@ -38,15 +34,18 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import com.hazelcast.client.config.ClientConfig;
+import com.hazelcast.config.Config;
+import com.hazelcast.config.MemberAttributeConfig;
 import com.hazelcast.instance.impl.HazelcastInstanceImpl;
-import io.restassured.response.Response;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.lessThan;
+import static org.hamcrest.Matchers.notNullValue;
 
 @Slf4j
 public class RestApiIT {
@@ -55,24 +54,44 @@ public class RestApiIT {
 
     private static ClientJobProxy clientJobProxy;
 
-    private static HazelcastInstanceImpl hazelcastInstance;
+    private static ClientJobProxy batchJobProxy;
+
+    private static HazelcastInstanceImpl node1;
+
+    private static HazelcastInstanceImpl node2;
+
+    private static SeaTunnelClient engineClient;
 
     @BeforeEach
     void beforeClass() throws Exception {
         String testClusterName = TestUtils.getClusterName("RestApiIT");
-        SeaTunnelConfig seaTunnelConfig = ConfigProvider.locateAndGetSeaTunnelConfig();
-        seaTunnelConfig.getHazelcastConfig().setClusterName(testClusterName);
-        hazelcastInstance = SeaTunnelServerStarter.createHazelcastInstance(seaTunnelConfig);
-        Common.setDeployMode(DeployMode.CLIENT);
+        SeaTunnelConfig node1Config = ConfigProvider.locateAndGetSeaTunnelConfig();
+        node1Config.getHazelcastConfig().setClusterName(testClusterName);
+        node1Config.getEngineConfig().getSlotServiceConfig().setDynamicSlot(false);
+        node1Config.getEngineConfig().getSlotServiceConfig().setSlotNum(20);
+        MemberAttributeConfig node1Tags = new MemberAttributeConfig();
+        node1Tags.setAttribute("node", "node1");
+        node1Config.getHazelcastConfig().setMemberAttributeConfig(node1Tags);
+        node1 = SeaTunnelServerStarter.createHazelcastInstance(node1Config);
+
+        MemberAttributeConfig node2Tags = new MemberAttributeConfig();
+        node2Tags.setAttribute("node", "node2");
+        Config node2hzconfig = node1Config.getHazelcastConfig().setMemberAttributeConfig(node2Tags);
+        SeaTunnelConfig node2Config = ConfigProvider.locateAndGetSeaTunnelConfig();
+        node2Config.getEngineConfig().getSlotServiceConfig().setDynamicSlot(false);
+        node2Config.getEngineConfig().getSlotServiceConfig().setSlotNum(20);
+        node2Config.setHazelcastConfig(node2hzconfig);
+        node2 = SeaTunnelServerStarter.createHazelcastInstance(node2Config);
+
         String filePath = TestUtils.getResource("stream_fakesource_to_file.conf");
         JobConfig jobConfig = new JobConfig();
         jobConfig.setName("fake_to_file");
 
         ClientConfig clientConfig = ConfigProvider.locateAndGetClientConfig();
         clientConfig.setClusterName(testClusterName);
-        SeaTunnelClient engineClient = new SeaTunnelClient(clientConfig);
-        JobExecutionEnvironment jobExecutionEnv =
-                engineClient.createExecutionContext(filePath, jobConfig);
+        engineClient = new SeaTunnelClient(clientConfig);
+        ClientJobExecutionEnvironment jobExecutionEnv =
+                engineClient.createExecutionContext(filePath, jobConfig, node1Config);
 
         clientJobProxy = jobExecutionEnv.execute();
 
@@ -82,219 +101,391 @@ public class RestApiIT {
                         () ->
                                 Assertions.assertEquals(
                                         JobStatus.RUNNING, clientJobProxy.getJobStatus()));
+
+        String batchFilePath = TestUtils.getResource("fakesource_to_console.conf");
+        JobConfig batchConf = new JobConfig();
+        batchConf.setName("fake_to_console");
+        ClientJobExecutionEnvironment batchJobExecutionEnv =
+                engineClient.createExecutionContext(batchFilePath, batchConf, node1Config);
+        batchJobProxy = batchJobExecutionEnv.execute();
+        Awaitility.await()
+                .atMost(5, TimeUnit.MINUTES)
+                .untilAsserted(
+                        () ->
+                                Assertions.assertEquals(
+                                        JobStatus.FINISHED, batchJobProxy.getJobStatus()));
     }
 
     @Test
     public void testGetRunningJobById() {
-        given().get(
-                        HOST
-                                + hazelcastInstance
-                                        .getCluster()
-                                        .getLocalMember()
-                                        .getAddress()
-                                        .getPort()
-                                + RestConstant.RUNNING_JOB_URL
-                                + "/"
-                                + clientJobProxy.getJobId())
-                .then()
-                .statusCode(200)
-                .body("jobName", equalTo("fake_to_file"))
-                .body("jobStatus", equalTo("RUNNING"));
+        Arrays.asList(node2, node1)
+                .forEach(
+                        instance -> {
+                            given().get(
+                                            HOST
+                                                    + instance.getCluster()
+                                                            .getLocalMember()
+                                                            .getAddress()
+                                                            .getPort()
+                                                    + RestConstant.RUNNING_JOB_URL
+                                                    + "/"
+                                                    + clientJobProxy.getJobId())
+                                    .then()
+                                    .statusCode(200)
+                                    .body("jobName", equalTo("fake_to_file"))
+                                    .body("jobStatus", equalTo("RUNNING"));
+                        });
+    }
+
+    @Test
+    public void testGetJobById() {
+        Arrays.asList(node2, node1)
+                .forEach(
+                        instance -> {
+                            given().get(
+                                            HOST
+                                                    + instance.getCluster()
+                                                            .getLocalMember()
+                                                            .getAddress()
+                                                            .getPort()
+                                                    + RestConstant.RUNNING_JOB_URL
+                                                    + "/"
+                                                    + batchJobProxy.getJobId())
+                                    .then()
+                                    .statusCode(200)
+                                    .body("jobName", equalTo("fake_to_console"))
+                                    .body("jobStatus", equalTo("FINISHED"));
+                        });
+    }
+
+    @Test
+    public void testGetAnNotExistJobById() {
+        Arrays.asList(node2, node1)
+                .forEach(
+                        instance -> {
+                            given().get(
+                                            HOST
+                                                    + instance.getCluster()
+                                                            .getLocalMember()
+                                                            .getAddress()
+                                                            .getPort()
+                                                    + RestConstant.RUNNING_JOB_URL
+                                                    + "/"
+                                                    + 123)
+                                    .then()
+                                    .statusCode(200)
+                                    .body("jobId", equalTo("123"));
+                        });
+        Arrays.asList(node2, node1)
+                .forEach(
+                        instance -> {
+                            given().get(
+                                            HOST
+                                                    + instance.getCluster()
+                                                            .getLocalMember()
+                                                            .getAddress()
+                                                            .getPort()
+                                                    + RestConstant.RUNNING_JOB_URL
+                                                    + "/")
+                                    .then()
+                                    .statusCode(500);
+                        });
     }
 
     @Test
     public void testGetRunningJobs() {
+        Arrays.asList(node2, node1)
+                .forEach(
+                        instance -> {
+                            given().get(
+                                            HOST
+                                                    + instance.getCluster()
+                                                            .getLocalMember()
+                                                            .getAddress()
+                                                            .getPort()
+                                                    + RestConstant.RUNNING_JOBS_URL)
+                                    .then()
+                                    .statusCode(200)
+                                    .body("[0].jobName", equalTo("fake_to_file"))
+                                    .body("[0].jobStatus", equalTo("RUNNING"));
+                        });
+    }
+
+    @Test
+    public void testGetJobInfoByJobId() {
+        Arrays.asList(node2, node1)
+                .forEach(
+                        instance -> {
+                            given().get(
+                                            HOST
+                                                    + instance.getCluster()
+                                                            .getLocalMember()
+                                                            .getAddress()
+                                                            .getPort()
+                                                    + RestConstant.JOB_INFO_URL
+                                                    + "/"
+                                                    + batchJobProxy.getJobId())
+                                    .then()
+                                    .statusCode(200)
+                                    .body("jobName", equalTo("fake_to_console"))
+                                    .body("jobStatus", equalTo("FINISHED"));
+                        });
+    }
+
+    @Test
+    public void testOverview() {
+        Arrays.asList(node2, node1)
+                .forEach(
+                        instance -> {
+                            given().get(
+                                            HOST
+                                                    + instance.getCluster()
+                                                            .getLocalMember()
+                                                            .getAddress()
+                                                            .getPort()
+                                                    + RestConstant.OVERVIEW)
+                                    .then()
+                                    .statusCode(200)
+                                    .body("projectVersion", notNullValue())
+                                    .body("totalSlot", equalTo("40"))
+                                    .body("workers", equalTo("2"));
+                        });
+    }
+
+    @Test
+    public void testOverviewFilterByTag() {
+        Arrays.asList(node2, node1)
+                .forEach(
+                        instance -> {
+                            given().get(
+                                            HOST
+                                                    + instance.getCluster()
+                                                            .getLocalMember()
+                                                            .getAddress()
+                                                            .getPort()
+                                                    + RestConstant.OVERVIEW
+                                                    + "?node=node1")
+                                    .then()
+                                    .statusCode(200)
+                                    .body("projectVersion", notNullValue())
+                                    .body("totalSlot", equalTo("20"))
+                                    .body("workers", equalTo("1"));
+                        });
+    }
+
+    @Test
+    public void testUpdateTagsSuccess() {
+
+        String config = "{\n" + "    \"tag1\": \"dev_1\",\n" + "    \"tag2\": \"dev_2\"\n" + "}";
         given().get(
                         HOST
-                                + hazelcastInstance
-                                        .getCluster()
-                                        .getLocalMember()
-                                        .getAddress()
-                                        .getPort()
-                                + RestConstant.RUNNING_JOBS_URL)
+                                + node1.getCluster().getLocalMember().getAddress().getPort()
+                                + RestConstant.OVERVIEW
+                                + "?tag1=dev_1")
                 .then()
                 .statusCode(200)
-                .body("[0].jobName", equalTo("fake_to_file"))
-                .body("[0].jobStatus", equalTo("RUNNING"));
+                .body("projectVersion", notNullValue())
+                .body("totalSlot", equalTo("0"))
+                .body("workers", equalTo("0"));
+        given().body(config)
+                .put(
+                        HOST
+                                + node1.getCluster().getLocalMember().getAddress().getPort()
+                                + RestConstant.UPDATE_TAGS_URL)
+                .then()
+                .statusCode(200)
+                .body("message", equalTo("update node tags done."));
+
+        given().get(
+                        HOST
+                                + node1.getCluster().getLocalMember().getAddress().getPort()
+                                + RestConstant.OVERVIEW
+                                + "?tag1=dev_1")
+                .then()
+                .statusCode(200)
+                .body("projectVersion", notNullValue())
+                .body("totalSlot", equalTo("20"))
+                .body("workers", equalTo("1"));
+    }
+
+    @Test
+    public void testUpdateTagsFail() {
+
+        given().put(
+                        HOST
+                                + node1.getCluster().getLocalMember().getAddress().getPort()
+                                + RestConstant.UPDATE_TAGS_URL)
+                .then()
+                .statusCode(400)
+                .body("message", equalTo("Request body is empty."));
+    }
+
+    @Test
+    public void testClearTags() {
+
+        String config = "{}";
+        given().get(
+                        HOST
+                                + node1.getCluster().getLocalMember().getAddress().getPort()
+                                + RestConstant.OVERVIEW
+                                + "?node=node1")
+                .then()
+                .statusCode(200)
+                .body("projectVersion", notNullValue())
+                .body("totalSlot", equalTo("20"))
+                .body("workers", equalTo("1"));
+        given().body(config)
+                .put(
+                        HOST
+                                + node1.getCluster().getLocalMember().getAddress().getPort()
+                                + RestConstant.UPDATE_TAGS_URL)
+                .then()
+                .statusCode(200)
+                .body("message", equalTo("update node tags done."));
+
+        given().get(
+                        HOST
+                                + node1.getCluster().getLocalMember().getAddress().getPort()
+                                + RestConstant.OVERVIEW
+                                + "?node=node1")
+                .then()
+                .statusCode(200)
+                .body("projectVersion", notNullValue())
+                .body("totalSlot", equalTo("0"))
+                .body("workers", equalTo("0"));
+    }
+
+    @Test
+    public void testGetRunningThreads() {
+        Arrays.asList(node2, node1)
+                .forEach(
+                        instance ->
+                                given().get(
+                                                HOST
+                                                        + instance.getCluster()
+                                                                .getLocalMember()
+                                                                .getAddress()
+                                                                .getPort()
+                                                        + RestConstant.RUNNING_THREADS)
+                                        .then()
+                                        .statusCode(200)
+                                        .body("[0].threadName", notNullValue())
+                                        .body("[0].classLoader", notNullValue()));
     }
 
     @Test
     public void testSystemMonitoringInformation() {
-        given().get(
-                        HOST
-                                + hazelcastInstance
-                                        .getCluster()
-                                        .getLocalMember()
-                                        .getAddress()
-                                        .getPort()
-                                + RestConstant.SYSTEM_MONITORING_INFORMATION)
-                .then()
-                .assertThat()
-                .time(lessThan(5000L))
-                .statusCode(200);
+        Arrays.asList(node2, node1)
+                .forEach(
+                        instance -> {
+                            given().get(
+                                            HOST
+                                                    + instance.getCluster()
+                                                            .getLocalMember()
+                                                            .getAddress()
+                                                            .getPort()
+                                                    + RestConstant.SYSTEM_MONITORING_INFORMATION)
+                                    .then()
+                                    .assertThat()
+                                    .time(lessThan(5000L))
+                                    .body("[0].host", equalTo("localhost"))
+                                    .body("[0].port", notNullValue())
+                                    .body("[0].isMaster", notNullValue())
+                                    .statusCode(200);
+                        });
     }
 
     @Test
-    public void testSubmitJob() {
-        String jobId = submitJob("BATCH").getBody().jsonPath().getString("jobId");
-        SeaTunnelServer seaTunnelServer =
-                (SeaTunnelServer)
-                        hazelcastInstance
-                                .node
-                                .getNodeExtension()
-                                .createExtensionServices()
-                                .get(Constant.SEATUNNEL_SERVICE_NAME);
-        JobStatus jobStatus =
-                seaTunnelServer.getCoordinatorService().getJobStatus(Long.parseLong(jobId));
-        Assertions.assertEquals(JobStatus.RUNNING, jobStatus);
-        Awaitility.await()
-                .atMost(2, TimeUnit.MINUTES)
-                .untilAsserted(
-                        () ->
-                                Assertions.assertEquals(
-                                        JobStatus.FINISHED,
-                                        seaTunnelServer
-                                                .getCoordinatorService()
-                                                .getJobStatus(Long.parseLong(jobId))));
+    public void testEncryptConfig() {
+        Arrays.asList(node2, node1)
+                .forEach(
+                        instance -> {
+                            String config =
+                                    "{\n"
+                                            + "    \"env\": {\n"
+                                            + "        \"parallelism\": 1,\n"
+                                            + "        \"shade.identifier\":\"base64\"\n"
+                                            + "    },\n"
+                                            + "    \"source\": [\n"
+                                            + "        {\n"
+                                            + "            \"plugin_name\": \"MySQL-CDC\",\n"
+                                            + "            \"schema\" : {\n"
+                                            + "                \"fields\": {\n"
+                                            + "                    \"name\": \"string\",\n"
+                                            + "                    \"age\": \"int\"\n"
+                                            + "                }\n"
+                                            + "            },\n"
+                                            + "            \"result_table_name\": \"fake\",\n"
+                                            + "            \"parallelism\": 1,\n"
+                                            + "            \"hostname\": \"127.0.0.1\",\n"
+                                            + "            \"username\": \"seatunnel\",\n"
+                                            + "            \"password\": \"seatunnel_password\",\n"
+                                            + "            \"table-name\": \"inventory_vwyw0n\"\n"
+                                            + "        }\n"
+                                            + "    ],\n"
+                                            + "    \"transform\": [\n"
+                                            + "    ],\n"
+                                            + "    \"sink\": [\n"
+                                            + "        {\n"
+                                            + "            \"plugin_name\": \"Clickhouse\",\n"
+                                            + "            \"host\": \"localhost:8123\",\n"
+                                            + "            \"database\": \"default\",\n"
+                                            + "            \"table\": \"fake_all\",\n"
+                                            + "            \"username\": \"seatunnel\",\n"
+                                            + "            \"password\": \"seatunnel_password\"\n"
+                                            + "        }\n"
+                                            + "    ]\n"
+                                            + "}";
+                            given().body(config)
+                                    .post(
+                                            HOST
+                                                    + instance.getCluster()
+                                                            .getLocalMember()
+                                                            .getAddress()
+                                                            .getPort()
+                                                    + RestConstant.ENCRYPT_CONFIG)
+                                    .then()
+                                    .statusCode(200)
+                                    .body("source[0].result_table_name", equalTo("fake"))
+                                    .body("source[0].username", equalTo("c2VhdHVubmVs"))
+                                    .body(
+                                            "source[0].password",
+                                            equalTo("c2VhdHVubmVsX3Bhc3N3b3Jk"));
+                        });
     }
 
     @Test
-    public void testStopJob() {
-        String jobId = submitJob("STREAMING").getBody().jsonPath().getString("jobId");
-        SeaTunnelServer seaTunnelServer =
-                (SeaTunnelServer)
-                        hazelcastInstance
-                                .node
-                                .getNodeExtension()
-                                .createExtensionServices()
-                                .get(Constant.SEATUNNEL_SERVICE_NAME);
-        Awaitility.await()
-                .atMost(2, TimeUnit.MINUTES)
-                .untilAsserted(
-                        () ->
-                                Assertions.assertEquals(
-                                        JobStatus.RUNNING,
-                                        seaTunnelServer
-                                                .getCoordinatorService()
-                                                .getJobStatus(Long.parseLong(jobId))));
-
-        String parameters = "{" + "\"jobId\":" + jobId + "," + "\"isStopWithSavePoint\":true}";
-
-        given().body(parameters)
-                .post(
-                        HOST
-                                + hazelcastInstance
-                                        .getCluster()
-                                        .getLocalMember()
-                                        .getAddress()
-                                        .getPort()
-                                + RestConstant.STOP_JOB_URL)
-                .then()
-                .statusCode(200)
-                .body("jobId", equalTo(jobId));
-
-        Awaitility.await()
-                .atMost(6, TimeUnit.MINUTES)
-                .untilAsserted(
-                        () ->
-                                Assertions.assertEquals(
-                                        JobStatus.FINISHED,
-                                        seaTunnelServer
-                                                .getCoordinatorService()
-                                                .getJobStatus(Long.parseLong(jobId))));
-
-        String jobId2 = submitJob("STREAMING").getBody().jsonPath().getString("jobId");
-
-        Awaitility.await()
-                .atMost(2, TimeUnit.MINUTES)
-                .untilAsserted(
-                        () ->
-                                Assertions.assertEquals(
-                                        JobStatus.RUNNING,
-                                        seaTunnelServer
-                                                .getCoordinatorService()
-                                                .getJobStatus(Long.parseLong(jobId2))));
-        parameters = "{" + "\"jobId\":" + jobId2 + "," + "\"isStopWithSavePoint\":false}";
-
-        given().body(parameters)
-                .post(
-                        HOST
-                                + hazelcastInstance
-                                        .getCluster()
-                                        .getLocalMember()
-                                        .getAddress()
-                                        .getPort()
-                                + RestConstant.STOP_JOB_URL)
-                .then()
-                .statusCode(200)
-                .body("jobId", equalTo(jobId2));
-
-        Awaitility.await()
-                .atMost(2, TimeUnit.MINUTES)
-                .untilAsserted(
-                        () ->
-                                Assertions.assertEquals(
-                                        JobStatus.CANCELED,
-                                        seaTunnelServer
-                                                .getCoordinatorService()
-                                                .getJobStatus(Long.parseLong(jobId2))));
+    public void testGetThreadDump() {
+        Arrays.asList(node2, node1)
+                .forEach(
+                        instance -> {
+                            given().get(
+                                            HOST
+                                                    + instance.getCluster()
+                                                            .getLocalMember()
+                                                            .getAddress()
+                                                            .getPort()
+                                                    + RestConstant.THREAD_DUMP)
+                                    .then()
+                                    .statusCode(200)
+                                    .body("[0].threadName", notNullValue())
+                                    .body("[0].threadState", notNullValue())
+                                    .body("[0].stackTrace", notNullValue())
+                                    .body("[0].threadId", notNullValue());
+                        });
     }
 
     @AfterEach
     void afterClass() {
-        if (hazelcastInstance != null) {
-            hazelcastInstance.shutdown();
+        if (engineClient != null) {
+            engineClient.close();
         }
-    }
 
-    private Response submitJob(String jobMode) {
-        String requestBody =
-                "{\n"
-                        + "    \"env\": {\n"
-                        + "        \"job.mode\": \""
-                        + jobMode
-                        + "\"\n"
-                        + "    },\n"
-                        + "    \"source\": [\n"
-                        + "        {\n"
-                        + "            \"plugin_name\": \"FakeSource\",\n"
-                        + "            \"result_table_name\": \"fake\",\n"
-                        + "            \"row.num\": 100,\n"
-                        + "            \"schema\": {\n"
-                        + "                \"fields\": {\n"
-                        + "                    \"name\": \"string\",\n"
-                        + "                    \"age\": \"int\",\n"
-                        + "                    \"card\": \"int\"\n"
-                        + "                }\n"
-                        + "            }\n"
-                        + "        }\n"
-                        + "    ],\n"
-                        + "    \"transform\": [\n"
-                        + "    ],\n"
-                        + "    \"sink\": [\n"
-                        + "        {\n"
-                        + "            \"plugin_name\": \"Console\",\n"
-                        + "            \"source_table_name\": [\"fake\"]\n"
-                        + "        }\n"
-                        + "    ]\n"
-                        + "}";
-        String parameters = "jobId=1&jobName=test&isStartWithSavePoint=false";
-        // Only jobName is compared because jobId is randomly generated if isStartWithSavePoint is
-        // false
-        Response response =
-                given().body(requestBody)
-                        .post(
-                                HOST
-                                        + hazelcastInstance
-                                                .getCluster()
-                                                .getLocalMember()
-                                                .getAddress()
-                                                .getPort()
-                                        + RestConstant.SUBMIT_JOB_URL
-                                        + "?"
-                                        + parameters);
-
-        response.then().statusCode(200).body("jobName", equalTo("test"));
-        return response;
+        if (node1 != null) {
+            node1.shutdown();
+        }
+        if (node2 != null) {
+            node2.shutdown();
+        }
     }
 }

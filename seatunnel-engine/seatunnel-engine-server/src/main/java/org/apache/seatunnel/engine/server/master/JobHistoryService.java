@@ -36,6 +36,7 @@ import com.hazelcast.logging.ILogger;
 import com.hazelcast.map.IMap;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.Getter;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -76,7 +77,7 @@ public class JobHistoryService {
      * finishedJobStateImap key is jobId and value is jobState(json) JobStateData Indicates the
      * status of the job, pipeline, and task
      */
-    private final IMap<Long, JobState> finishedJobStateImap;
+    @Getter private final IMap<Long, JobState> finishedJobStateImap;
 
     private final IMap<Long, JobMetrics> finishedJobMetricsImap;
 
@@ -103,16 +104,27 @@ public class JobHistoryService {
         this.finishedJobExpireTime = finishedJobExpireTime;
     }
 
-    // Gets the status of a running and completed job
+    // Gets the status of a running and completed job.
     public String listAllJob() {
+        List<JobStatusData> status = getJobStatusData();
+        try {
+            return objectMapper.writeValueAsString(status);
+        } catch (JsonProcessingException e) {
+            logger.severe("Failed to list all job", e);
+            throw new SeaTunnelEngineException(e);
+        }
+    }
+
+    public List<JobStatusData> getJobStatusData() {
         List<JobStatusData> status = new ArrayList<>();
-        Set<Long> runningJonIds =
+        final List<JobState> runningJobStateList =
                 runningJobMasterMap.values().stream()
-                        .map(master -> master.getJobImmutableInformation().getJobId())
-                        .collect(Collectors.toSet());
+                        .map(master -> toJobStateMapper(master, true))
+                        .collect(Collectors.toList());
+        Set<Long> runningJonIds =
+                runningJobStateList.stream().map(JobState::getJobId).collect(Collectors.toSet());
         Stream.concat(
-                        runningJobMasterMap.values().stream()
-                                .map(master -> toJobStateMapper(master, true)),
+                        runningJobStateList.stream(),
                         finishedJobStateImap.values().stream()
                                 .filter(jobState -> !runningJonIds.contains(jobState.getJobId())))
                 .forEach(
@@ -126,12 +138,7 @@ public class JobHistoryService {
                                             jobState.getFinishTime());
                             status.add(jobStatusData);
                         });
-        try {
-            return objectMapper.writeValueAsString(status);
-        } catch (JsonProcessingException e) {
-            logger.severe("Failed to list all job", e);
-            throw new SeaTunnelEngineException(e);
-        }
+        return status;
     }
 
     // Get detailed status of a single job

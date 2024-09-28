@@ -20,7 +20,7 @@ Write data to Clickhouse can also be done using JDBC
 
 ## Options
 
-|          name          |  type   | required |             default value              |
+|          Name          |  Type   | Required |                Default                 |
 |------------------------|---------|----------|----------------------------------------|
 | host                   | string  | yes      | -                                      |
 | database               | string  | yes      | -                                      |
@@ -113,7 +113,7 @@ The directory where ClickhouseFile stores temporary files locally.
 
 ### common options
 
-Sink plugin common parameters, please refer to [Sink Common Options](common-options.md) for details
+Sink plugin common parameters, please refer to [Sink Common Options](../sink-common-options.md) for details
 
 ## Examples
 

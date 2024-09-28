@@ -4,7 +4,7 @@
 
 ## Description
 
-Use UDF SPI to extends the SQL transform functions lib.
+Use UDF SPI to extend the SQL transform functions lib.
 
 ## UDF API
 
@@ -91,7 +91,8 @@ public class ExampleUDF implements ZetaUDF {
 }
 ```
 
-Package the UDF project and copy the jar to the path: ${SEATUNNEL_HOME}/lib
+Package the UDF project and copy the jar to the path: ${SEATUNNEL_HOME}/lib. And if your UDF use third party library, you also need put it to ${SEATUNNEL_HOME}/lib.  
+If you use cluster mode, you need put the lib to all your node's ${SEATUNNEL_HOME}/lib folder and re-start the cluster.
 
 ## Example
 

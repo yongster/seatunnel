@@ -17,6 +17,8 @@
 
 package org.apache.seatunnel.connectors.seatunnel.kafka.config;
 
+import org.apache.seatunnel.shade.com.fasterxml.jackson.core.type.TypeReference;
+
 import org.apache.seatunnel.api.configuration.Option;
 import org.apache.seatunnel.api.configuration.Options;
 
@@ -106,7 +108,7 @@ public class Config {
     public static final Option<String> FIELD_DELIMITER =
             Options.key("field_delimiter")
                     .stringType()
-                    .noDefaultValue()
+                    .defaultValue(DEFAULT_FIELD_DELIMITER)
                     .withDescription("Customize the field delimiter for data format.");
 
     public static final Option<Integer> PARTITION =
@@ -145,9 +147,9 @@ public class Config {
                     .noDefaultValue()
                     .withDescription("The time required for consumption mode to be timestamp.");
 
-    public static final Option<Config> START_MODE_OFFSETS =
+    public static final Option<Map<String, Long>> START_MODE_OFFSETS =
             Options.key("start_mode.offsets")
-                    .objectType(Config.class)
+                    .type(new TypeReference<Map<String, Long>>() {})
                     .noDefaultValue()
                     .withDescription(
                             "The offset required for consumption mode to be specific_offsets.");
@@ -159,6 +161,12 @@ public class Config {
                     .defaultValue(-1L)
                     .withDescription(
                             "The interval for dynamically discovering topics and partitions.");
+
+    public static final Option<Long> KEY_POLL_TIMEOUT =
+            Options.key("poll.timeout")
+                    .longType()
+                    .defaultValue(10000L)
+                    .withDescription("The interval for poll message");
 
     public static final Option<MessageFormatErrorHandleWay> MESSAGE_FORMAT_ERROR_HANDLE_WAY_OPTION =
             Options.key("format_error_handle_way")
@@ -175,4 +183,24 @@ public class Config {
                     .defaultValue(KafkaSemantics.NON)
                     .withDescription(
                             "Semantics that can be chosen EXACTLY_ONCE/AT_LEAST_ONCE/NON, default NON.");
+
+    public static final Option<List<Map<String, Object>>> TABLE_LIST =
+            Options.key("table_list")
+                    .type(new TypeReference<List<Map<String, Object>>>() {})
+                    .noDefaultValue()
+                    .withDescription(
+                            "Topic list config. You can configure only one `table_list` or one `topic` at the same time");
+
+    public static final Option<String> PROTOBUF_SCHEMA =
+            Options.key("protobuf_schema")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Data serialization method protobuf metadata, used to parse protobuf data.");
+
+    public static final Option<String> PROTOBUF_MESSAGE_NAME =
+            Options.key("protobuf_message_name")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Parsing entity class names from Protobuf data.");
 }

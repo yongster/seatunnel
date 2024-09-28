@@ -48,7 +48,7 @@ public class JdbcDmIT extends AbstractJdbcIT {
     private static final String DM_SINK = "e2e_table_sink";
     private static final String DM_USERNAME = "SYSDBA";
     private static final String DM_PASSWORD = "SYSDBA";
-    private static final int DM_PORT = 5236;
+    private static final int DM_PORT = 5336;
     private static final String DM_URL = "jdbc:dm://" + HOST + ":%s";
 
     private static final String DRIVER_CLASS = "dm.jdbc.driver.DmDriver";
@@ -127,11 +127,9 @@ public class JdbcDmIT extends AbstractJdbcIT {
                 .configFile(CONFIG_FILE)
                 .insertSql(insertSql)
                 .testData(testDataSet)
+                .tablePathFullName(String.format("%s.%s", DM_DATABASE, DM_SOURCE))
                 .build();
     }
-
-    @Override
-    void compareResult() {}
 
     @Override
     String driverUrl() {
@@ -230,7 +228,7 @@ public class JdbcDmIT extends AbstractJdbcIT {
                         .withNetworkAliases(DM_CONTAINER_HOST)
                         .withLogConsumer(
                                 new Slf4jLogConsumer(DockerLoggerFactory.getLogger(DM_IMAGE)));
-        container.setPortBindings(Lists.newArrayList(String.format("%s:%s", 5236, 5236)));
+        container.setPortBindings(Lists.newArrayList(String.format("%s:%s", 5336, 5236)));
 
         return container;
     }

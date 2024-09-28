@@ -27,6 +27,7 @@ import org.apache.seatunnel.api.table.type.RowKind;
 import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
+import org.apache.seatunnel.api.table.type.SqlType;
 import org.apache.seatunnel.connectors.cdc.base.schema.SchemaChangeResolver;
 import org.apache.seatunnel.connectors.cdc.base.utils.SourceRecordUtils;
 import org.apache.seatunnel.connectors.cdc.debezium.DebeziumDeserializationConverterFactory;
@@ -118,10 +119,9 @@ public final class SeaTunnelRowDebeziumDeserializeSchema
             SourceRecord record, Collector<SeaTunnelRow> collector) {
         SchemaChangeEvent schemaChangeEvent = schemaChangeResolver.resolve(record, resultTypeInfo);
         if (schemaChangeEvent == null) {
-            log.info("Unsupported resolve schemaChangeEvent {}, just skip.", record);
+            log.warn("Unsupported resolve schemaChangeEvent {}, just skip.", record);
             return;
         }
-
         if (resultTypeInfo instanceof MultipleRowType) {
             Map<String, SeaTunnelRowType> newRowTypeMap = new HashMap<>();
             for (Map.Entry<String, SeaTunnelRowType> entry : (MultipleRowType) resultTypeInfo) {
@@ -184,7 +184,7 @@ public final class SeaTunnelRowDebeziumDeserializeSchema
             delete.setRowKind(RowKind.DELETE);
             delete.setTableId(tableId);
             collector.collect(delete);
-        } else {
+        } else if (operation == Envelope.Operation.UPDATE) {
             SeaTunnelRow before = extractBeforeRow(converters, record, messageStruct, valueSchema);
             before.setRowKind(RowKind.UPDATE_BEFORE);
             before.setTableId(tableId);
@@ -194,6 +194,8 @@ public final class SeaTunnelRowDebeziumDeserializeSchema
             after.setRowKind(RowKind.UPDATE_AFTER);
             after.setTableId(tableId);
             collector.collect(after);
+        } else {
+            log.warn("Received {} operation, skip", operation);
         }
     }
 
@@ -233,12 +235,20 @@ public final class SeaTunnelRowDebeziumDeserializeSchema
 
     @Override
     public void restoreCheckpointProducedType(SeaTunnelDataType<SeaTunnelRow> checkpointDataType) {
-        if (!checkpointDataType.getSqlType().equals(resultTypeInfo.getSqlType())) {
-            throw new IllegalStateException(
-                    String.format(
-                            "The produced type %s of the SeaTunnel deserialization schema "
-                                    + "doesn't match the type %s of the restored snapshot.",
-                            resultTypeInfo.getSqlType(), checkpointDataType.getSqlType()));
+        // If checkpointDataType is null, it indicates that DDL changes are not supported.
+        // Therefore, we need to use the latest table structure to ensure that data from newly added
+        // columns can be parsed correctly.
+        if (schemaChangeResolver == null) {
+            return;
+        }
+        if (SqlType.ROW.equals(checkpointDataType.getSqlType())
+                && SqlType.MULTIPLE_ROW.equals(resultTypeInfo.getSqlType())) {
+            // TODO: Older versions may have this issue
+            log.warn(
+                    "Skip incompatible restore type. produced type: {}, checkpoint type: {}",
+                    resultTypeInfo,
+                    checkpointDataType);
+            return;
         }
         if (checkpointDataType instanceof MultipleRowType) {
             MultipleRowType latestDataType = (MultipleRowType) resultTypeInfo;

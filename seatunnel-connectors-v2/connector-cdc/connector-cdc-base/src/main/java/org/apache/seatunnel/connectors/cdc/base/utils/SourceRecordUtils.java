@@ -28,6 +28,7 @@ import io.debezium.connector.AbstractSourceInfo;
 import io.debezium.data.Envelope;
 import io.debezium.document.DocumentReader;
 import io.debezium.relational.TableId;
+import io.debezium.relational.history.HistoryRecord;
 import io.debezium.util.SchemaNameAdjuster;
 
 import java.math.BigDecimal;
@@ -47,6 +48,8 @@ public class SourceRecordUtils {
 
     public static final String SCHEMA_CHANGE_EVENT_KEY_NAME =
             "io.debezium.connector.mysql.SchemaChangeKey";
+    public static final String HEARTBEAT_VALUE_SCHEMA_KEY_NAME =
+            "io.debezium.connector.common.Heartbeat";
     private static final DocumentReader DOCUMENT_READER = DocumentReader.defaultReader();
 
     /** Converts a {@link ResultSet} row to an array of Objects. */
@@ -103,6 +106,11 @@ public class SourceRecordUtils {
         return valueSchema != null
                 && valueSchema.field(Envelope.FieldName.OPERATION) != null
                 && value.getString(Envelope.FieldName.OPERATION) != null;
+    }
+
+    public static boolean isHeartbeatRecord(SourceRecord record) {
+        Schema valueSchema = record.valueSchema();
+        return valueSchema != null && valueSchema.name().equals(HEARTBEAT_VALUE_SCHEMA_KEY_NAME);
     }
 
     public static TableId getTableId(SourceRecord dataRecord) {
@@ -202,11 +210,14 @@ public class SourceRecordUtils {
         String databaseName = sourceStruct.getString(AbstractSourceInfo.DATABASE_NAME_KEY);
         String tableName = sourceStruct.getString(AbstractSourceInfo.TABLE_NAME_KEY);
         String schemaName = null;
-        try {
+        if (sourceStruct.schema().field(AbstractSourceInfo.SCHEMA_NAME_KEY) != null) {
             schemaName = sourceStruct.getString(AbstractSourceInfo.SCHEMA_NAME_KEY);
-        } catch (Throwable e) {
-            // ignore
         }
         return TablePath.of(databaseName, schemaName, tableName);
+    }
+
+    public static String getDdl(SourceRecord record) {
+        Struct schemaChangeStruct = (Struct) record.value();
+        return schemaChangeStruct.getString(HistoryRecord.Fields.DDL_STATEMENTS);
     }
 }

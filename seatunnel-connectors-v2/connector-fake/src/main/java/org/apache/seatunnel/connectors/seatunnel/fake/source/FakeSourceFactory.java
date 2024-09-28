@@ -20,7 +20,6 @@ package org.apache.seatunnel.connectors.seatunnel.fake.source;
 import org.apache.seatunnel.api.configuration.util.OptionRule;
 import org.apache.seatunnel.api.source.SeaTunnelSource;
 import org.apache.seatunnel.api.source.SourceSplit;
-import org.apache.seatunnel.api.table.catalog.CatalogOptions;
 import org.apache.seatunnel.api.table.catalog.schema.TableSchemaOptions;
 import org.apache.seatunnel.api.table.connector.TableSource;
 import org.apache.seatunnel.api.table.factory.Factory;
@@ -35,6 +34,7 @@ import java.io.Serializable;
 import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.ARRAY_SIZE;
 import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.BIGINT_FAKE_MODE;
 import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.BIGINT_TEMPLATE;
+import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.BINARY_VECTOR_DIMENSION;
 import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.BYTES_LENGTH;
 import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.DATE_DAY_TEMPLATE;
 import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.DATE_MONTH_TEMPLATE;
@@ -54,11 +54,13 @@ import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.S
 import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.SPLIT_READ_INTERVAL;
 import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.STRING_FAKE_MODE;
 import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.STRING_TEMPLATE;
+import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.TABLES_CONFIGS;
 import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.TIME_HOUR_TEMPLATE;
 import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.TIME_MINUTE_TEMPLATE;
 import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.TIME_SECOND_TEMPLATE;
 import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.TINYINT_FAKE_MODE;
 import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.TINYINT_TEMPLATE;
+import static org.apache.seatunnel.connectors.seatunnel.fake.config.FakeOption.VECTOR_DIMENSION;
 
 @AutoService(Factory.class)
 public class FakeSourceFactory implements TableSourceFactory {
@@ -70,7 +72,8 @@ public class FakeSourceFactory implements TableSourceFactory {
     @Override
     public OptionRule optionRule() {
         return OptionRule.builder()
-                .required(TableSchemaOptions.SCHEMA)
+                .optional(TABLES_CONFIGS)
+                .optional(TableSchemaOptions.SCHEMA)
                 .optional(STRING_FAKE_MODE)
                 .conditional(STRING_FAKE_MODE, FakeOption.FakeMode.TEMPLATE, STRING_TEMPLATE)
                 .optional(TINYINT_FAKE_MODE)
@@ -93,13 +96,14 @@ public class FakeSourceFactory implements TableSourceFactory {
                         MAP_SIZE,
                         ARRAY_SIZE,
                         BYTES_LENGTH,
+                        VECTOR_DIMENSION,
+                        BINARY_VECTOR_DIMENSION,
                         DATE_YEAR_TEMPLATE,
                         DATE_MONTH_TEMPLATE,
                         DATE_DAY_TEMPLATE,
                         TIME_HOUR_TEMPLATE,
                         TIME_MINUTE_TEMPLATE,
-                        TIME_SECOND_TEMPLATE,
-                        CatalogOptions.TABLE_NAMES)
+                        TIME_SECOND_TEMPLATE)
                 .build();
     }
 

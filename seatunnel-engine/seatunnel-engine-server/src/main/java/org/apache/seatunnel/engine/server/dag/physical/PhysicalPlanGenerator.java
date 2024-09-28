@@ -17,6 +17,7 @@
 
 package org.apache.seatunnel.engine.server.dag.physical;
 
+import org.apache.seatunnel.api.env.EnvCommonOptions;
 import org.apache.seatunnel.api.sink.SinkAggregatedCommitter;
 import org.apache.seatunnel.engine.common.config.server.QueueType;
 import org.apache.seatunnel.engine.common.utils.IdGenerator;
@@ -29,6 +30,7 @@ import org.apache.seatunnel.engine.core.dag.actions.ShuffleStrategy;
 import org.apache.seatunnel.engine.core.dag.actions.SinkAction;
 import org.apache.seatunnel.engine.core.dag.actions.SourceAction;
 import org.apache.seatunnel.engine.core.dag.internal.IntermediateQueue;
+import org.apache.seatunnel.engine.core.job.ConnectorJarIdentifier;
 import org.apache.seatunnel.engine.core.job.JobImmutableInformation;
 import org.apache.seatunnel.engine.core.job.PipelineStatus;
 import org.apache.seatunnel.engine.server.checkpoint.ActionStateKey;
@@ -149,7 +151,12 @@ public class PhysicalPlanGenerator {
     }
 
     public Tuple2<PhysicalPlan, Map<Integer, CheckpointPlan>> generate() {
-
+        Map<String, String> tagFilter =
+                (Map<String, String>)
+                        jobImmutableInformation
+                                .getJobConfig()
+                                .getEnvOptions()
+                                .get(EnvCommonOptions.NODE_TAG_FILTER.key());
         // TODO Determine which tasks do not need to be restored according to state
         CopyOnWriteArrayList<PassiveCompletableFuture<PipelineStatus>>
                 waitForCompleteBySubPlanList = new CopyOnWriteArrayList<>();
@@ -204,7 +211,8 @@ public class PhysicalPlanGenerator {
                                             jobImmutableInformation,
                                             executorService,
                                             runningJobStateIMap,
-                                            runningJobStateTimestampsIMap);
+                                            runningJobStateTimestampsIMap,
+                                            tagFilter);
                                 });
 
         PhysicalPlan physicalPlan =
@@ -274,7 +282,6 @@ public class PhysicalPlanGenerator {
 
                                 return new PhysicalVertex(
                                         atomicInteger.incrementAndGet(),
-                                        executorService,
                                         collect.size(),
                                         new TaskGroupDefaultImpl(
                                                 taskGroupLocation,
@@ -283,7 +290,9 @@ public class PhysicalPlanGenerator {
                                         flakeIdGenerator,
                                         pipelineIndex,
                                         totalPipelineNum,
-                                        sinkAction.getJarUrls(),
+                                        Collections.singletonList(sinkAction.getJarUrls()),
+                                        Collections.singletonList(
+                                                sinkAction.getConnectorJarIdentifiers()),
                                         jobImmutableInformation,
                                         initializationTimestamp,
                                         nodeEngine,
@@ -353,7 +362,7 @@ public class PhysicalPlanGenerator {
                                             new PhysicalExecutionFlow(
                                                     shuffleActionOfSinkFlow,
                                                     Collections.singletonList(sinkFlow));
-                                    setFlowConfig(shuffleFlow, parallelismIndex);
+                                    setFlowConfig(shuffleFlow);
 
                                     long taskGroupID =
                                             mixIDPrefixAndIndex(
@@ -380,7 +389,6 @@ public class PhysicalPlanGenerator {
                                     physicalVertices.add(
                                             new PhysicalVertex(
                                                     parallelismIndex,
-                                                    executorService,
                                                     shuffleFlow.getAction().getParallelism(),
                                                     new TaskGroupDefaultImpl(
                                                             taskGroupLocation,
@@ -391,7 +399,10 @@ public class PhysicalPlanGenerator {
                                                     flakeIdGenerator,
                                                     pipelineIndex,
                                                     totalPipelineNum,
-                                                    seaTunnelTask.getJarsUrl(),
+                                                    Collections.singletonList(
+                                                            seaTunnelTask.getJarsUrl()),
+                                                    Collections.singletonList(
+                                                            seaTunnelTask.getConnectorPluginJars()),
                                                     jobImmutableInformation,
                                                     initializationTimestamp,
                                                     nodeEngine,
@@ -410,7 +421,7 @@ public class PhysicalPlanGenerator {
                                                     taskGroupID);
                                     TaskLocation taskLocation =
                                             new TaskLocation(taskGroupLocation, taskIDPrefix, i);
-                                    setFlowConfig(flow, i);
+                                    setFlowConfig(flow);
                                     SeaTunnelTask seaTunnelTask =
                                             new TransformSeaTunnelTask(
                                                     jobImmutableInformation.getJobId(),
@@ -422,7 +433,6 @@ public class PhysicalPlanGenerator {
                                     physicalVertices.add(
                                             new PhysicalVertex(
                                                     i,
-                                                    executorService,
                                                     flow.getAction().getParallelism(),
                                                     new TaskGroupDefaultImpl(
                                                             taskGroupLocation,
@@ -432,7 +442,10 @@ public class PhysicalPlanGenerator {
                                                     flakeIdGenerator,
                                                     pipelineIndex,
                                                     totalPipelineNum,
-                                                    seaTunnelTask.getJarsUrl(),
+                                                    Collections.singletonList(
+                                                            seaTunnelTask.getJarsUrl()),
+                                                    Collections.singletonList(
+                                                            seaTunnelTask.getConnectorPluginJars()),
                                                     jobImmutableInformation,
                                                     initializationTimestamp,
                                                     nodeEngine,
@@ -477,7 +490,6 @@ public class PhysicalPlanGenerator {
 
                             return new PhysicalVertex(
                                     atomicInteger.incrementAndGet(),
-                                    executorService,
                                     sources.size(),
                                     new TaskGroupDefaultImpl(
                                             taskGroupLocation,
@@ -486,7 +498,8 @@ public class PhysicalPlanGenerator {
                                     flakeIdGenerator,
                                     pipelineIndex,
                                     totalPipelineNum,
-                                    t.getJarsUrl(),
+                                    Collections.singletonList(t.getJarsUrl()),
+                                    Collections.singletonList(t.getConnectorPluginJars()),
                                     jobImmutableInformation,
                                     initializationTimestamp,
                                     nodeEngine,
@@ -524,7 +537,7 @@ public class PhysicalPlanGenerator {
                                         flows.stream()
                                                 .map(
                                                         f -> {
-                                                            setFlowConfig(f, finalParallelismIndex);
+                                                            setFlowConfig(f);
                                                             long taskIDPrefix =
                                                                     flowTaskIDPrefixMap
                                                                             .computeIfAbsent(
@@ -563,10 +576,15 @@ public class PhysicalPlanGenerator {
                                                         })
                                                 .peek(this::fillCheckpointPlan)
                                                 .collect(Collectors.toList());
-                                Set<URL> jars =
+                                List<Set<URL>> jars =
                                         taskList.stream()
-                                                .flatMap(task -> task.getJarsUrl().stream())
-                                                .collect(Collectors.toSet());
+                                                .map(SeaTunnelTask::getJarsUrl)
+                                                .collect(Collectors.toList());
+
+                                List<Set<ConnectorJarIdentifier>> jarIdentifiers =
+                                        taskList.stream()
+                                                .map(SeaTunnelTask::getConnectorPluginJars)
+                                                .collect(Collectors.toList());
 
                                 if (taskList.stream()
                                         .anyMatch(TransformSeaTunnelTask.class::isInstance)) {
@@ -592,13 +610,13 @@ public class PhysicalPlanGenerator {
                                     t.add(
                                             new PhysicalVertex(
                                                     i,
-                                                    executorService,
                                                     flow.getAction().getParallelism(),
                                                     taskGroup,
                                                     flakeIdGenerator,
                                                     pipelineIndex,
                                                     totalPipelineNum,
                                                     jars,
+                                                    jarIdentifiers,
                                                     jobImmutableInformation,
                                                     initializationTimestamp,
                                                     nodeEngine,
@@ -608,7 +626,6 @@ public class PhysicalPlanGenerator {
                                     t.add(
                                             new PhysicalVertex(
                                                     i,
-                                                    executorService,
                                                     flow.getAction().getParallelism(),
                                                     new TaskGroupDefaultImpl(
                                                             taskGroupLocation,
@@ -621,6 +638,7 @@ public class PhysicalPlanGenerator {
                                                     pipelineIndex,
                                                     totalPipelineNum,
                                                     jars,
+                                                    jarIdentifiers,
                                                     jobImmutableInformation,
                                                     initializationTimestamp,
                                                     nodeEngine,
@@ -649,10 +667,9 @@ public class PhysicalPlanGenerator {
      * set config for flow, some flow should have config support for execute on task.
      *
      * @param f flow
-     * @param parallelismIndex the parallelism index of flow
      */
     @SuppressWarnings("unchecked")
-    private void setFlowConfig(Flow f, int parallelismIndex) {
+    private void setFlowConfig(Flow f) {
 
         if (f instanceof PhysicalExecutionFlow) {
             PhysicalExecutionFlow<?, FlowConfig> flow = (PhysicalExecutionFlow<?, FlowConfig>) f;
@@ -680,7 +697,7 @@ public class PhysicalPlanGenerator {
         }
 
         if (!f.getNext().isEmpty()) {
-            f.getNext().forEach(n -> setFlowConfig(n, parallelismIndex));
+            f.getNext().forEach(this::setFlowConfig);
         }
     }
 

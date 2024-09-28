@@ -18,12 +18,18 @@
 package org.apache.seatunnel.engine.common.config;
 
 import org.apache.seatunnel.engine.common.config.server.CheckpointConfig;
+import org.apache.seatunnel.engine.common.config.server.ConnectorJarStorageConfig;
 import org.apache.seatunnel.engine.common.config.server.QueueType;
 import org.apache.seatunnel.engine.common.config.server.ServerConfigOptions;
 import org.apache.seatunnel.engine.common.config.server.SlotServiceConfig;
+import org.apache.seatunnel.engine.common.config.server.TelemetryConfig;
 import org.apache.seatunnel.engine.common.config.server.ThreadShareMode;
+import org.apache.seatunnel.engine.common.runtime.ExecutionMode;
 
 import lombok.Data;
+
+import java.util.Collections;
+import java.util.Map;
 
 import static com.hazelcast.internal.util.Preconditions.checkBackupCount;
 import static com.hazelcast.internal.util.Preconditions.checkNotNull;
@@ -49,9 +55,24 @@ public class EngineConfig {
 
     private CheckpointConfig checkpointConfig = ServerConfigOptions.CHECKPOINT.defaultValue();
 
+    private ConnectorJarStorageConfig connectorJarStorageConfig =
+            ServerConfigOptions.CONNECTOR_JAR_STORAGE_CONFIG.defaultValue();
+
+    private boolean classloaderCacheMode =
+            ServerConfigOptions.CLASSLOADER_CACHE_MODE.defaultValue();
+
     private QueueType queueType = ServerConfigOptions.QUEUE_TYPE.defaultValue();
     private int historyJobExpireMinutes =
             ServerConfigOptions.HISTORY_JOB_EXPIRE_MINUTES.defaultValue();
+
+    private ClusterRole clusterRole = ClusterRole.MASTER_AND_WORKER;
+
+    private String eventReportHttpApi;
+    private Map<String, String> eventReportHttpHeaders = Collections.emptyMap();
+
+    private ExecutionMode mode = ExecutionMode.CLUSTER;
+
+    private TelemetryConfig telemetryConfig = ServerConfigOptions.TELEMETRY.defaultValue();
 
     public void setBackupCount(int newBackupCount) {
         checkBackupCount(newBackupCount, 0);
@@ -94,6 +115,22 @@ public class EngineConfig {
     public EngineConfig setQueueType(QueueType queueType) {
         checkNotNull(queueType);
         this.queueType = queueType;
+        return this;
+    }
+
+    public enum ClusterRole {
+        MASTER_AND_WORKER,
+        MASTER,
+        WORKER
+    }
+
+    public EngineConfig setEventReportHttpApi(String eventReportHttpApi) {
+        this.eventReportHttpApi = eventReportHttpApi;
+        return this;
+    }
+
+    public EngineConfig setEventReportHttpHeaders(Map<String, String> eventReportHttpHeaders) {
+        this.eventReportHttpHeaders = eventReportHttpHeaders;
         return this;
     }
 }
